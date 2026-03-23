@@ -14,75 +14,82 @@ router.post('/webhook/bird', async (req, res) => {
     // ── Log full payload for debugging ──────────────────────────
     console.log('[Webhook] Received Bird payload:', JSON.stringify(req.body, null, 2));
 
-    // Bird webhook payloads can vary by event type.
-    // Try multiple extraction strategies:
+    // ── Bird payload shape (confirmed from real webhook): ───────
+    // { service: "channels", event: "whatsapp.inbound", payload: { ... } }
+    // payload.sender.contact.identifierValue  → phone number
+    // payload.body.text.text                  → message text (string)
+    // payload.channelId                       → channel ID
+    // payload.direction                       → "incoming" / "outgoing"
     const body = req.body;
+    const payload = body.payload || body.data || body;
 
-    // Strategy 1: Direct top-level fields { contact, message, channel }
-    // Strategy 2: Nested in body.data or body.payload
-    // Strategy 3: Array of events
-    const event = body.data || body.payload || body;
-
-    const contact = event.contact || event.sender || event.from || {};
-    const message = event.message || event.body || {};
-    const channel = event.channel || {};
-
-    // Extract message text — try multiple paths
+    // ── Extract message text ────────────────────────────────────
+    // Bird nests text as: payload.body.text.text (string)
     const messageText =
-      message?.body?.text ||
-      message?.text ||
-      message?.content?.text ||
-      message?.content ||
-      event?.body?.text ||
-      event?.text ||
+      payload?.body?.text?.text ||       // Bird confirmed path
+      payload?.body?.text ||             // fallback if text is flat string
+      payload?.message?.text ||
+      payload?.text ||
       null;
 
-    // Extract direction — try multiple paths
+    // Ensure messageText is a string (not an object)
+    const messageString = (typeof messageText === 'object' && messageText !== null)
+      ? messageText.text || JSON.stringify(messageText)
+      : messageText;
+
+    // ── Extract direction ───────────────────────────────────────
     const direction =
-      message?.direction ||
-      event?.direction ||
-      event?.type ||
-      body?.type ||
+      payload?.direction ||
+      body?.direction ||
       null;
 
-    console.log('[Webhook] Parsed:', {
-      messageText,
-      direction,
-      contact: JSON.stringify(contact).substring(0, 200),
-      channelId: channel?.id || channel?.channelId || 'none',
-    });
-
-    // Skip if no message text or outbound echo
-    if (!messageText) {
-      console.log('[Webhook] No message text found, skipping');
-      return;
-    }
-
-    // Skip outbound messages (echoes)
-    if (direction === 'outbound' || direction === 'sent') {
-      console.log('[Webhook] Outbound message, skipping');
-      return;
-    }
-
-    // Extract channel ID for platform resolution
+    // ── Extract channel ID ──────────────────────────────────────
     const channelId =
-      channel?.id ||
-      channel?.channelId ||
-      event?.channelId ||
+      payload?.channelId ||
       body?.channelId ||
       null;
 
     const platform = resolvePlatform(channelId);
 
-    // Extract phone number — try multiple paths
+    // ── Extract phone number ────────────────────────────────────
+    // Bird nests phone as: payload.sender.contact.identifierValue
+    const senderContact = payload?.sender?.contact || {};
     const phoneNumber =
-      contact?.identifierValue ||
-      contact?.platformIdentifier ||
-      contact?.phone ||
-      contact?.msisdn ||
-      event?.receiver?.contacts?.[0]?.identifierValue ||
-      event?.from?.phone ||
+      senderContact?.identifierValue ||      // Bird confirmed path
+      senderContact?.platformIdentifier ||
+      senderContact?.phone ||
+      payload?.contact?.identifierValue ||   // fallback
+      payload?.from?.phone ||
       null;
+
+    // ── Extract Bird contact metadata ───────────────────────────
+    const birdContactId = senderContact?.id || null;
+    const displayName =
+      senderContact?.annotations?.name ||
+      senderContact?.displayName ||
+      senderContact?.name ||
+      'Unknown';
+
+    console.log('[Webhook] Parsed:', {
+      messageString,
+      direction,
+      phone: phoneNumber,
+      channelId,
+      platform,
+      birdContactId,
+    });
+
+    // Skip if no message text
+    if (!messageString) {
+      console.log('[Webhook] No message text found, skipping');
+      return;
+    }
+
+    // Skip outbound messages (echoes)
+    if (direction === 'outgoing' || direction === 'outbound' || direction === 'sent') {
+      console.log('[Webhook] Outbound message, skipping');
+      return;
+    }
 
     console.log('[Webhook] Phone:', phoneNumber, 'Platform:', platform);
 
@@ -100,18 +107,12 @@ router.post('/webhook/bird', async (req, res) => {
 
     // If no lead exists, create one (organic inbound from non-registrant)
     if (!lead) {
-      const displayName =
-        contact?.displayName ||
-        contact?.name ||
-        contact?.firstName ||
-        'Unknown';
-
       const { data: newLead, error: insertErr } = await supabase.from('leads').insert({
         phone: phoneNumber,
         name: displayName,
         preferred_channel: platform,
-        bird_contact_id: contact?.id || null,
-        bird_conversation_id: message?.conversationId || event?.conversationId || null,
+        bird_contact_id: birdContactId,
+        bird_conversation_id: payload?.conversationId || null,
         stage: 'new_lead'
       }).select().single();
 
@@ -127,10 +128,10 @@ router.post('/webhook/bird', async (req, res) => {
     const { data: inboundMsg, error: msgErr } = await supabase.from('messenger_messages').insert({
       lead_id: lead.id,
       direction: 'inbound',
-      text: messageText,
+      text: messageString,
       platform,
       sent_by: 'user',
-      bird_message_id: message?.id || event?.id || null
+      bird_message_id: payload?.id || null
     }).select().single();
 
     if (msgErr) {
@@ -142,7 +143,7 @@ router.post('/webhook/bird', async (req, res) => {
       leadId: lead.id,
       message: {
         id: inboundMsg?.id || `m_${Date.now()}`,
-        text: messageText,
+        text: messageString,
         senderType: 'user',
         platform,
         createdAt: inboundMsg?.created_at || new Date().toISOString(),
@@ -161,7 +162,7 @@ router.post('/webhook/bird', async (req, res) => {
     // AI responds using shared service
     const aiReply = await getAIResponse({
       userId: lead.pipsight_user_id ?? lead.id,
-      newMessage: messageText,
+      newMessage: messageString,
       surface: 'messenger',
       platform
     });
@@ -197,7 +198,7 @@ router.post('/webhook/bird', async (req, res) => {
     });
 
     // Run funnel classification in background (non-blocking)
-    runFunnelClassifier(lead.id, messageText, aiReply).catch(console.error);
+    runFunnelClassifier(lead.id, messageString, aiReply).catch(console.error);
 
   } catch (err) {
     console.error('[Webhook] Error processing Bird event:', err);
