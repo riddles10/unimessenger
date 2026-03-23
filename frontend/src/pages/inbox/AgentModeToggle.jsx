@@ -1,27 +1,28 @@
-export default function AgentModeToggle({ mode, assignedAgentId, onToggle }) {
+import React from 'react';
+
+const AgentModeToggle = ({ mode, onToggle }) => {
   const isAgent = mode === 'agent';
 
   return (
-    <div className="flex items-center gap-2">
-      <span className={`text-xs font-medium ${!isAgent ? 'text-amber-600' : 'text-gray-400'}`}>
-        AI
-      </span>
+    <div className="flex items-center gap-3">
+      <span className={`text-sm ${!isAgent ? 'text-[#f59e0b] font-bold' : 'text-[#8a91a4]'}`}>AI</span>
+      
       <button
         onClick={() => onToggle(isAgent ? 'ai' : 'agent')}
-        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-          isAgent ? 'bg-red-500' : 'bg-amber-500'
+        className={`relative w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#0B0E14] focus:ring-[#00e5ff] ${
+          isAgent ? 'bg-[#ff3366]' : 'bg-[#f59e0b]'
         }`}
-        title={isAgent ? 'Switch to AI mode' : 'Switch to Agent mode'}
       >
         <span
-          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-            isAgent ? 'translate-x-6' : 'translate-x-1'
+          className={`absolute top-1 left-1 bg-white w-4 h-4 rounded-full transition-transform duration-200 ${
+            isAgent ? 'transform translate-x-6' : ''
           }`}
         />
       </button>
-      <span className={`text-xs font-medium ${isAgent ? 'text-red-600' : 'text-gray-400'}`}>
-        Agent
-      </span>
+
+      <span className={`text-sm ${isAgent ? 'text-[#ff3366] font-bold' : 'text-[#8a91a4]'}`}>Agent</span>
     </div>
   );
-}
+};
+
+export default AgentModeToggle;

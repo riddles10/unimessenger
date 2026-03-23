@@ -1,125 +1,100 @@
-import { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import FunnelTracker from '../../components/FunnelTracker';
+import Badge from '../../components/Badge';
+import { WhatsappLogo, TelegramLogo } from '@phosphor-icons/react';
+import { INTENT_COLORS } from '../../utils/constants';
+import { updateLead } from '../../utils/api';
 
-const FUNNEL_STAGES = ['new_lead', 'qualified', 'demo_sent', 'negotiating', 'converted'];
+const LeadPanel = ({ lead }) => {
+  const [notes, setNotes] = useState('');
 
-const STAGE_LABELS = {
-  new_lead: 'New Lead',
-  qualified: 'Qualified',
-  demo_sent: 'Demo Sent',
-  negotiating: 'Negotiating',
-  converted: 'Converted'
-};
+  useEffect(() => {
+    setNotes(lead?.notes || '');
+  }, [lead?.id]); // Re-initialize when lead changes
 
-const STAGE_COLORS = {
-  new_lead: 'bg-blue-500',
-  qualified: 'bg-purple-500',
-  demo_sent: 'bg-yellow-500',
-  negotiating: 'bg-orange-500',
-  converted: 'bg-green-500'
-};
+  if (!lead) return <div className="w-[320px] bg-[#131722] border-l border-[#2a2e39] hidden lg:block flex-shrink-0" />;
 
-function ChannelIndicator({ channel }) {
-  if (channel === 'whatsapp') {
-    return <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-700">WhatsApp</span>;
-  }
-  if (channel === 'telegram') {
-    return <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-700">Telegram</span>;
-  }
-  return <span className="text-xs text-gray-400">Unknown</span>;
-}
-
-export default function LeadPanel({ lead, messageCount, onUpdateLead }) {
-  const [notes, setNotes] = useState(lead.notes || '');
-
-  const currentStageIdx = FUNNEL_STAGES.indexOf(lead.stage);
-  const daysInFunnel = lead.created_at
-    ? Math.floor((Date.now() - new Date(lead.created_at).getTime()) / 86400000)
-    : 0;
-
-  function handleNotesBlur() {
-    if (notes !== (lead.notes || '')) {
-      onUpdateLead({ notes });
+  const handleNotesBlur = async () => {
+    if (notes !== lead.notes) {
+      try {
+        await updateLead(lead.id, { notes });
+      } catch (err) {
+        console.error('Failed to save notes', err);
+      }
     }
-  }
+  };
+
+  const intentStyle = INTENT_COLORS[lead.intent] || INTENT_COLORS.browsing;
 
   return (
-    <div className="p-4 overflow-y-auto h-full">
-      {/* Lead info */}
-      <div className="mb-6">
-        <h3 className="font-semibold text-gray-900 text-lg">{lead.name || 'Unknown'}</h3>
-        <p className="text-sm text-gray-500 mt-1">{lead.phone}</p>
-        {lead.email && <p className="text-sm text-gray-500">{lead.email}</p>}
-        <div className="mt-2">
-          <ChannelIndicator channel={lead.preferred_channel} />
+    <div className="w-[320px] h-full bg-[#131722] border-l border-[#2a2e39] flex flex-col overflow-y-auto hidden lg:flex flex-shrink-0">
+      {/* Contact Info */}
+      <div className="p-6 border-b border-[#2a2e39] flex flex-col items-center">
+        <div className="w-16 h-16 rounded-2xl bg-[#1e2433] flex items-center justify-center mb-4">
+          {lead.channel === 'whatsapp' ? (
+            <WhatsappLogo size={32} className="text-[#00ff88]" />
+          ) : (
+            <TelegramLogo size={32} className="text-[#00e5ff]" />
+          )}
         </div>
+        <h2 className="text-white text-[1.1rem] font-semibold">{lead.name}</h2>
+        <p className="text-[#8a91a4] text-sm mt-1">{lead.phone}</p>
+        {lead.email && <p className="text-[#8a91a4] text-sm mt-1">{lead.email}</p>}
       </div>
 
-      {/* Funnel progress */}
-      <div className="mb-6">
-        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Funnel Stage</h4>
-        <div className="space-y-2">
-          {FUNNEL_STAGES.map((stage, idx) => {
-            const isActive = idx <= currentStageIdx;
-            const isCurrent = idx === currentStageIdx;
-            return (
-              <div key={stage} className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full flex-shrink-0 ${
-                  isActive ? STAGE_COLORS[stage] : 'bg-gray-200'
-                } ${isCurrent ? 'ring-2 ring-offset-1 ring-gray-400' : ''}`} />
-                <span className={`text-sm ${isCurrent ? 'font-semibold text-gray-900' : isActive ? 'text-gray-700' : 'text-gray-400'}`}>
-                  {STAGE_LABELS[stage]}
-                </span>
-              </div>
-            );
-          })}
+      <div className="p-6 flex-1 flex flex-col gap-6">
+        {/* Intent Badge */}
+        <div className="flex flex-col gap-2">
+          <span className="text-[#8a91a4] text-xs font-semibold uppercase tracking-wider">Intent</span>
+          <div className="flex">
+            <Badge colorStyles={intentStyle}>
+              {lead.intent ? lead.intent.replace('_', ' ') : 'browsing'}
+            </Badge>
+          </div>
         </div>
-      </div>
 
-      {/* Intent */}
-      {lead.intent && (
-        <div className="mb-6">
-          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Intent</h4>
-          <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-700 capitalize">
-            {lead.intent?.replace(/_/g, ' ')}
-          </span>
+        {/* Funnel Tracker */}
+        <div className="flex flex-col gap-2">
+          <span className="text-[#8a91a4] text-xs font-semibold uppercase tracking-wider">Funnel Stage</span>
+          <FunnelTracker currentStage={lead.stage} />
         </div>
-      )}
 
-      {/* Stats */}
-      <div className="mb-6">
-        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Engagement</h4>
+        {/* Engagement Stats Grid */}
         <div className="grid grid-cols-2 gap-3">
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <div className="text-lg font-semibold text-gray-900">{messageCount}</div>
-            <div className="text-[10px] text-gray-500">Messages</div>
+          <div className="bg-[#1e2433] rounded-lg p-3 flex flex-col items-center justify-center border border-[#2a2e39]">
+            <span className="text-[#8a91a4] text-[0.75rem]">Messages</span>
+            <span className="text-white font-semibold text-lg">{lead.msgCount || 0}</span>
           </div>
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <div className="text-lg font-semibold text-gray-900">{daysInFunnel}</div>
-            <div className="text-[10px] text-gray-500">Days in Funnel</div>
+          <div className="bg-[#1e2433] rounded-lg p-3 flex flex-col items-center justify-center border border-[#2a2e39]">
+            <span className="text-[#8a91a4] text-[0.75rem]">Days in Funnel</span>
+            <span className="text-white font-semibold text-lg">{lead.daysInFunnel || 1}</span>
           </div>
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <div className="text-lg font-semibold text-gray-900">{lead.lead_score || 0}</div>
-            <div className="text-[10px] text-gray-500">Lead Score</div>
+          <div className="bg-[#1e2433] rounded-lg p-3 flex flex-col items-center justify-center border border-[#2a2e39]">
+            <span className="text-[#8a91a4] text-[0.75rem]">Lead Score</span>
+            <span className="text-white font-semibold text-lg">{lead.score || 0}/100</span>
           </div>
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <div className="text-lg font-semibold text-gray-900 capitalize">{lead.mode}</div>
-            <div className="text-[10px] text-gray-500">Mode</div>
+          <div className="bg-[#1e2433] rounded-lg p-3 flex flex-col items-center justify-center border border-[#2a2e39]">
+            <span className="text-[#8a91a4] text-[0.75rem]">Mode</span>
+            <span className="text-white font-semibold text-lg flex items-center gap-1">
+              {lead.mode === 'ai' ? '🤖 AI' : '👨‍💻 Agt'}
+            </span>
           </div>
         </div>
-      </div>
 
-      {/* Notes */}
-      <div>
-        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Notes</h4>
-        <textarea
-          value={notes}
-          onChange={e => setNotes(e.target.value)}
-          onBlur={handleNotesBlur}
-          placeholder="Add notes about this lead..."
-          rows={4}
-          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-        />
+        {/* Notes Textarea */}
+        <div className="flex flex-col gap-2 flex-1 min-h-[150px]">
+          <span className="text-[#8a91a4] text-xs font-semibold uppercase tracking-wider">Notes</span>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            onBlur={handleNotesBlur}
+            placeholder="Add notes about this lead..."
+            className="flex-1 bg-[#0B0E14] border border-[#2a2e39] rounded-lg p-3 text-white text-sm resize-none focus:outline-none focus:border-[#00e5ff] transition-colors"
+          />
+        </div>
       </div>
     </div>
   );
-}
+};
+
+export default LeadPanel;

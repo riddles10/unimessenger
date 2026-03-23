@@ -1,109 +1,142 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { PaperPlaneRight, WhatsappLogo, TelegramLogo } from '@phosphor-icons/react';
 import AgentModeToggle from './AgentModeToggle';
+import { sendMessage } from '../../utils/api';
 
-function ChannelBadge({ platform }) {
-  if (platform === 'whatsapp') {
-    return <span className="inline-flex items-center px-1 py-0.5 text-[9px] font-medium rounded bg-green-100 text-green-700">WA</span>;
-  }
-  if (platform === 'telegram') {
-    return <span className="inline-flex items-center px-1 py-0.5 text-[9px] font-medium rounded bg-blue-100 text-blue-700">TG</span>;
-  }
-  return null;
-}
-
-function MessageBubble({ msg }) {
-  const isInbound = msg.direction === 'inbound';
-  const isAgent = msg.sent_by === 'agent';
-  const isAI = msg.sent_by === 'ai';
-
-  let bgColor = 'bg-gray-100 text-gray-900'; // default user inbound
-  if (isAI) bgColor = 'bg-amber-50 text-gray-900 border border-amber-200';
-  if (isAgent) bgColor = 'bg-red-50 text-gray-900 border border-red-200';
-
-  const time = msg.created_at
-    ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : '';
-
-  return (
-    <div className={`flex ${isInbound ? 'justify-start' : 'justify-end'} mb-2`}>
-      <div className={`max-w-[70%] rounded-lg px-3 py-2 ${bgColor}`}>
-        <div className="flex items-center gap-1.5 mb-0.5">
-          <span className="text-[10px] font-medium text-gray-500 uppercase">
-            {isInbound ? 'User' : isAgent ? 'Agent' : 'AI'}
-          </span>
-          <ChannelBadge platform={msg.platform} />
-        </div>
-        <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-        <span className="text-[10px] text-gray-400 mt-1 block text-right">{time}</span>
-      </div>
-    </div>
-  );
-}
-
-export default function ChatView({ lead, messages, onSendMessage, onModeToggle }) {
-  const [draft, setDraft] = useState('');
+const ChatView = ({ lead, messages, onToggleMode }) => {
+  const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef(null);
 
-  useEffect(() => {
+  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
   }, [messages]);
 
-  function handleSubmit(e) {
-    e.preventDefault();
-    if (!draft.trim()) return;
-    onSendMessage(draft.trim());
-    setDraft('');
+  const handleSend = async (e) => {
+    e?.preventDefault();
+    if (!inputText.trim() || !lead || lead.mode !== 'agent') return;
+
+    try {
+      await sendMessage(lead.id, inputText);
+      setInputText('');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  if (!lead) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center bg-[#0B0E14]">
+        <div className="w-16 h-16 rounded-full bg-[#131722] flex items-center justify-center mb-4">
+          <span className="text-2xl text-[#2a2e39] font-bold">P</span>
+        </div>
+        <p className="text-[#8a91a4]">Select a conversation to start</p>
+      </div>
+    );
   }
 
-  const isAgentMode = lead.mode === 'agent';
-
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex-1 flex flex-col bg-[#0B0E14] h-full overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-white">
+      <div className="h-[72px] px-6 flex items-center justify-between border-b border-[#2a2e39] bg-[#0B0E14] flex-shrink-0">
         <div>
-          <h2 className="font-semibold text-gray-900">{lead.name || lead.phone}</h2>
-          <span className="text-xs text-gray-500">{lead.phone}</span>
+          <h2 className="text-white font-semibold flex items-center gap-2">
+            {lead.name}
+            {lead.channel === 'whatsapp' ? <WhatsappLogo className="text-[#00ff88]" /> : <TelegramLogo className="text-[#00e5ff]" />}
+          </h2>
+          <p className="text-[#8a91a4] text-xs mt-1">{lead.phone || lead.email || 'No contact details'}</p>
         </div>
-        <AgentModeToggle
-          mode={lead.mode}
-          assignedAgentId={lead.assigned_agent_id}
-          onToggle={onModeToggle}
-        />
+        <AgentModeToggle mode={lead.mode} onToggle={onToggleMode} />
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
-        {messages.map(msg => (
-          <MessageBubble key={msg.id} msg={msg} />
-        ))}
+      {/* Messages Thread */}
+      <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+        {messages.length === 0 ? (
+          <div className="text-center text-[#8a91a4] text-sm my-8 flex items-center gap-4">
+            <div className="flex-1 h-px bg-[#2a2e39]" />
+            Start of conversation
+            <div className="flex-1 h-px bg-[#2a2e39]" />
+          </div>
+        ) : null}
+
+        {messages.map((msg, idx) => {
+          const isUser = msg.senderType === 'user';
+          const isAI = msg.senderType === 'ai';
+          const isAgent = msg.senderType === 'agent';
+          
+          let bgClass = 'bg-[#1e2433]';
+          let borderClass = 'border-transparent';
+          let labelText = 'User';
+          let labelColorClass = 'text-[#8a91a4]';
+
+          if (isAI) {
+            bgClass = 'bg-[rgba(245,158,11,0.08)]';
+            borderClass = 'border-[#f59e0b]';
+            labelText = 'AI';
+            labelColorClass = 'text-[#f59e0b]';
+          } else if (isAgent) {
+            bgClass = 'bg-[rgba(255,51,102,0.08)]';
+            borderClass = 'border-[#ff3366]';
+            labelText = 'Agent';
+            labelColorClass = 'text-[#ff3366]';
+          }
+
+          const date = new Date(msg.createdAt || Date.now());
+          const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+          return (
+            <div key={msg.id || idx} className="flex justify-start w-full">
+              <div className={`max-w-[75%] rounded-[12px] p-3 px-4 border ${bgClass} ${borderClass} relative`}>
+                <div className="flex justify-between items-center mb-1 gap-4">
+                  <span className={`text-xs font-semibold ${labelColorClass}`}>{labelText}</span>
+                  {msg.platform === 'whatsapp' || lead.channel === 'whatsapp' ? (
+                    <WhatsappLogo size={14} className="text-[#8a91a4]" />
+                  ) : (
+                    <TelegramLogo size={14} className="text-[#8a91a4]" />
+                  )}
+                </div>
+                <p className="text-[#d1d4dc] text-[0.95rem] whitespace-pre-wrap">{msg.text}</p>
+                <div className="text-right mt-1">
+                  <span className="text-[#8a91a4] text-[0.75rem]">{timeStr}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Compose bar */}
-      <div className="border-t border-gray-200 bg-white p-3">
-        {isAgentMode ? (
-          <form onSubmit={handleSubmit} className="flex gap-2">
+      {/* Compose Bar */}
+      <div className="p-4 bg-[#0B0E14] border-t border-[#2a2e39] flex-shrink-0">
+        {lead.mode === 'ai' ? (
+          <div className="px-4 py-3 bg-[#131722] rounded-full text-center border border-[#2a2e39]">
+            <span className="text-[#8a91a4] text-sm">Switch to Agent mode to reply</span>
+          </div>
+        ) : (
+          <form onSubmit={handleSend} className="flex gap-2 relative">
             <input
               type="text"
-              value={draft}
-              onChange={e => setDraft(e.target.value)}
-              placeholder="Type a message..."
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder="Type your message..."
+              className="flex-1 bg-[#131722] border border-[#2a2e39] rounded-[28px] px-5 py-3 text-white focus:outline-none focus:border-[#00e5ff] focus:ring-1 focus:ring-[#00e5ff] transition-all"
             />
             <button
               type="submit"
-              className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+              disabled={!inputText.trim()}
+              className="w-[48px] h-[48px] rounded-full flex items-center justify-center shrink-0 disabled:opacity-50 transition-opacity flex-shrink-0"
+              style={{ background: 'linear-gradient(135deg, #00e5ff, #00bfff)' }}
             >
-              Send
+              <PaperPlaneRight weight="fill" className="text-black" size={20} />
             </button>
           </form>
-        ) : (
-          <div className="text-center py-2 text-sm text-gray-400" title="Switch to Agent mode to type manually">
-            AI is handling this conversation. Switch to Agent mode to reply manually.
-          </div>
         )}
       </div>
     </div>
   );
-}
+};
+
+export default ChatView;

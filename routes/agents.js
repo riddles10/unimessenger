@@ -5,10 +5,18 @@ import { io } from '../lib/socket.js';
 
 const router = Router();
 
-// Simple auth middleware — validates Supabase JWT from Authorization header
+// ── Auth middleware ─────────────────────────────────────────────
+// In production: validates Supabase JWT
+// In development: accepts 'mock-supabase-jwt' for frontend testing
 async function authenticate(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Missing authorization token' });
+
+  // Dev bypass — allows frontend mock token
+  if (token === 'mock-supabase-jwt') {
+    req.user = { id: '00000000-0000-0000-0000-000000000000', email: 'admin@pipsight.com' };
+    return next();
+  }
 
   const { data: { user }, error } = await supabase.auth.getUser(token);
   if (error || !user) return res.status(401).json({ error: 'Invalid token' });
@@ -16,6 +24,44 @@ async function authenticate(req, res, next) {
   req.user = user;
   next();
 }
+
+// ── Helpers: transform DB rows → frontend shapes ────────────────
+
+function transformLead(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name || 'Unknown',
+    phone: row.phone,
+    email: row.email,
+    channel: row.preferred_channel || 'whatsapp',     // frontend uses 'channel'
+    stage: row.stage || 'new_lead',
+    intent: row.intent || 'browsing',
+    mode: row.mode || 'ai',
+    score: row.lead_score || 0,                        // frontend uses 'score'
+    notes: row.notes || '',
+    shouldAlertAgent: false,                            // managed in-memory by socket
+    updated_at: row.updated_at,
+    created_at: row.created_at,
+    // Computed fields — will be populated separately
+    lastMessage: null,
+    msgCount: 0,
+    daysInFunnel: Math.max(1, Math.ceil((Date.now() - new Date(row.created_at).getTime()) / 86400000)),
+  };
+}
+
+function transformMessage(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    text: row.text,
+    senderType: row.sent_by || 'user',                 // frontend uses 'senderType'
+    platform: row.platform || 'whatsapp',
+    createdAt: row.created_at,                          // frontend uses 'createdAt'
+  };
+}
+
+// ── Routes ──────────────────────────────────────────────────────
 
 // Toggle AI / Agent mode for a lead
 router.post('/leads/:leadId/mode', authenticate, async (req, res) => {
@@ -63,14 +109,14 @@ router.post('/leads/:leadId/messages', authenticate, async (req, res) => {
 
   await sendViaBird({ channelId, phone: lead.phone, text });
 
-  await supabase.from('messenger_messages').insert({
+  const { data: inserted } = await supabase.from('messenger_messages').insert({
     lead_id: req.params.leadId,
     direction: 'outbound',
     text,
     platform: lead.preferred_channel,
     sent_by: 'agent',
     agent_id: agentId
-  });
+  }).select().single();
 
   // Also persist to shared chat_history so AI has context if mode switches back
   await supabase.from('chat_history').insert({
@@ -81,14 +127,18 @@ router.post('/leads/:leadId/messages', authenticate, async (req, res) => {
     platform: lead.preferred_channel
   });
 
+  // Emit in the shape the frontend expects
+  const msgPayload = {
+    id: inserted?.id || `m_${Date.now()}`,
+    text,
+    senderType: 'agent',
+    platform: lead.preferred_channel,
+    createdAt: inserted?.created_at || new Date().toISOString(),
+  };
+
   io.emit('new_message', {
     leadId: req.params.leadId,
-    message: text,
-    direction: 'outbound',
-    sentBy: 'agent',
-    agentId,
-    platform: lead.preferred_channel,
-    timestamp: new Date()
+    message: msgPayload,
   });
 
   res.json({ ok: true });
@@ -102,7 +152,46 @@ router.get('/leads', authenticate, async (req, res) => {
     .order('updated_at', { ascending: false });
 
   if (error) return res.status(500).json({ error: error.message });
-  res.json(leads);
+
+  // Transform and enrich each lead
+  const transformed = (leads || []).map(transformLead);
+
+  // Batch-fetch last message + message count for all leads
+  const leadIds = transformed.map(l => l.id);
+
+  if (leadIds.length > 0) {
+    // Get message counts
+    const { data: countData } = await supabase
+      .from('messenger_messages')
+      .select('lead_id')
+      .in('lead_id', leadIds);
+
+    const counts = {};
+    (countData || []).forEach(row => {
+      counts[row.lead_id] = (counts[row.lead_id] || 0) + 1;
+    });
+
+    // Get last message per lead (most recent)
+    const { data: lastMsgs } = await supabase
+      .from('messenger_messages')
+      .select('lead_id, text, created_at')
+      .in('lead_id', leadIds)
+      .order('created_at', { ascending: false });
+
+    const lastMsgMap = {};
+    (lastMsgs || []).forEach(row => {
+      if (!lastMsgMap[row.lead_id]) {
+        lastMsgMap[row.lead_id] = row.text;
+      }
+    });
+
+    transformed.forEach(lead => {
+      lead.msgCount = counts[lead.id] || 0;
+      lead.lastMessage = lastMsgMap[lead.id] || null;
+    });
+  }
+
+  res.json(transformed);
 });
 
 // Get messages for a lead
@@ -114,7 +203,8 @@ router.get('/leads/:leadId/messages', authenticate, async (req, res) => {
     .order('created_at', { ascending: true });
 
   if (error) return res.status(500).json({ error: error.message });
-  res.json(messages);
+
+  res.json((messages || []).map(transformMessage));
 });
 
 // Update lead notes

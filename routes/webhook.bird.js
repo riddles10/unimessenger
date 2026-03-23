@@ -40,27 +40,30 @@ router.post('/webhook/bird', async (req, res) => {
     }
 
     // Log inbound message
-    await supabase.from('messenger_messages').insert({
+    const { data: inboundMsg } = await supabase.from('messenger_messages').insert({
       lead_id: lead.id,
       direction: 'inbound',
       text: message.body.text,
       platform,
       sent_by: 'user',
       bird_message_id: message.id
-    });
+    }).select().single();
 
-    // Emit to inbox UI in real-time
+    // Emit to inbox UI — shape matches frontend expectation
     io.emit('new_message', {
       leadId: lead.id,
-      message: message.body.text,
-      direction: 'inbound',
-      platform,
-      timestamp: new Date()
+      message: {
+        id: inboundMsg?.id || `m_${Date.now()}`,
+        text: message.body.text,
+        senderType: 'user',
+        platform,
+        createdAt: inboundMsg?.created_at || new Date().toISOString(),
+      }
     });
 
     // If agent has taken over — do not auto-respond, just notify
     if (lead.mode === 'agent') {
-      io.emit('agent_message_received', { leadId: lead.id, message: message.body.text });
+      io.emit('agent_alert', { leadId: lead.id });
       return;
     }
 
@@ -80,22 +83,24 @@ router.post('/webhook/bird', async (req, res) => {
     await sendViaBird({ channelId, phone: phoneNumber, text: aiReply });
 
     // Log outbound
-    await supabase.from('messenger_messages').insert({
+    const { data: outboundMsg } = await supabase.from('messenger_messages').insert({
       lead_id: lead.id,
       direction: 'outbound',
       text: aiReply,
       platform,
       sent_by: 'ai'
-    });
+    }).select().single();
 
-    // Emit outbound to inbox UI
+    // Emit outbound to inbox UI — shape matches frontend
     io.emit('new_message', {
       leadId: lead.id,
-      message: aiReply,
-      direction: 'outbound',
-      platform,
-      sentBy: 'ai',
-      timestamp: new Date()
+      message: {
+        id: outboundMsg?.id || `m_${Date.now()}`,
+        text: aiReply,
+        senderType: 'ai',
+        platform,
+        createdAt: outboundMsg?.created_at || new Date().toISOString(),
+      }
     });
 
     // Run funnel classification in background (non-blocking)
