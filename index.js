@@ -33,7 +33,7 @@ startWelcomeWorker();
 
 // Start server
 const PORT = process.env.PORT || 4000;
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`[Unimessenger] Server running on port ${PORT}`);
   console.log(`[Unimessenger] Webhook endpoint: POST /webhook/bird`);
   console.log(`[Unimessenger] Health check: GET /health`);
