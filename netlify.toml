@@ -1,0 +1,26 @@
+# ============================================================
+# Unimessenger — Netlify Deploy Configuration
+# Hosts the React inbox frontend
+# Backend API is at https://unimessenger.onrender.com
+# ============================================================
+
+[build]
+  command = "cd frontend && npm install && npm run build"
+  publish = "frontend/dist"
+
+# ── Headers ──────────────────────────────────────────────────
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options        = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy        = "strict-origin-when-cross-origin"
+    # Allow unimessenger.onrender.com API calls
+    Access-Control-Allow-Origin = "*"
+
+# ── SPA Fallback ─────────────────────────────────────────────
+# Route all 404s to index.html (React Router will handle)
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
