@@ -7,6 +7,7 @@ import { startWelcomeWorker } from './queues/welcome.js';
 import webhookRouter from './routes/webhook.bird.js';
 import agentsRouter from './routes/agents.js';
 import internalRouter from './routes/internal.js';
+import authRouter from './routes/auth.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -16,6 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
+app.use('/api', authRouter);
 app.use(webhookRouter);
 app.use('/api', agentsRouter);
 app.use(internalRouter);

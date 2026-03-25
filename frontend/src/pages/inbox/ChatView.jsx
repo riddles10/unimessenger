@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { PaperPlaneRight, WhatsappLogo, TelegramLogo } from '@phosphor-icons/react';
+import { PaperPlaneRight, WhatsappLogo, TelegramLogo, DeviceMobile } from '@phosphor-icons/react';
 import AgentModeToggle from './AgentModeToggle';
 import { sendMessage } from '../../utils/api';
 
@@ -92,11 +92,20 @@ const ChatView = ({ lead, messages, onToggleMode }) => {
               <div className={`max-w-[75%] rounded-[12px] p-3 px-4 border ${bgClass} ${borderClass} relative`}>
                 <div className="flex justify-between items-center mb-1 gap-4">
                   <span className={`text-xs font-semibold ${labelColorClass}`}>{labelText}</span>
-                  {msg.platform === 'whatsapp' || lead.channel === 'whatsapp' ? (
-                    <WhatsappLogo size={14} className="text-[#8a91a4]" />
-                  ) : (
-                    <TelegramLogo size={14} className="text-[#8a91a4]" />
-                  )}
+                  <div className="flex items-center gap-1">
+                    {msg.surface === 'app' ? (
+                      <span className="text-[0.65rem] text-[#8a91a4] bg-[#1e2433] px-1.5 py-0.5 rounded">App</span>
+                    ) : null}
+                    {(msg.platform === 'whatsapp' || (!msg.platform && lead.channel === 'whatsapp')) ? (
+                      <WhatsappLogo size={14} className="text-[#8a91a4]" />
+                    ) : msg.platform === 'telegram' ? (
+                      <TelegramLogo size={14} className="text-[#8a91a4]" />
+                    ) : msg.surface === 'app' ? (
+                      <DeviceMobile size={14} className="text-[#8a91a4]" />
+                    ) : (
+                      <WhatsappLogo size={14} className="text-[#8a91a4]" />
+                    )}
+                  </div>
                 </div>
                 <p className="text-[#d1d4dc] text-[0.95rem] whitespace-pre-wrap">{msg.text}</p>
                 <div className="text-right mt-1">

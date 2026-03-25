@@ -154,6 +154,15 @@ router.post('/webhook/bird', async (req, res) => {
 
     // If agent has taken over — do not auto-respond, just notify
     if (lead.mode === 'agent') {
+      // Still persist inbound message to chat_history so the unified feed stays complete
+      await supabase.from('chat_history').insert({
+        user_id: lead.pipsight_user_id ?? lead.id,
+        role: 'user',
+        content: messageString,
+        surface: 'messenger',
+        platform
+      });
+
       io.emit('agent_alert', { leadId: lead.id });
       console.log('[Webhook] Lead in agent mode, skipping AI response');
       return;

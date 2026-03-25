@@ -6,17 +6,9 @@ import { io } from '../lib/socket.js';
 const router = Router();
 
 // ── Auth middleware ─────────────────────────────────────────────
-// In production: validates Supabase JWT
-// In development: accepts 'mock-supabase-jwt' for frontend testing
 async function authenticate(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Missing authorization token' });
-
-  // Dev bypass — allows frontend mock token
-  if (token === 'mock-supabase-jwt') {
-    req.user = { id: '00000000-0000-0000-0000-000000000000', email: 'admin@pipsight.com' };
-    return next();
-  }
 
   const { data: { user }, error } = await supabase.auth.getUser(token);
   if (error || !user) return res.status(401).json({ error: 'Invalid token' });
@@ -57,7 +49,34 @@ function transformMessage(row) {
     text: row.text,
     senderType: row.sent_by || 'user',                 // frontend uses 'senderType'
     platform: row.platform || 'whatsapp',
+    surface: row.surface || 'messenger',
     createdAt: row.created_at,                          // frontend uses 'createdAt'
+  };
+}
+
+// Transform a chat_history row into the same frontend message shape
+function transformChatHistoryRow(row) {
+  if (!row) return null;
+
+  // Determine senderType from role + content
+  let senderType = 'user';
+  let text = row.content;
+  if (row.role === 'model') {
+    if (text.startsWith('[Agent]: ')) {
+      senderType = 'agent';
+      text = text.replace(/^\[Agent\]: /, '');
+    } else {
+      senderType = 'ai';
+    }
+  }
+
+  return {
+    id: row.id,
+    text,
+    senderType,
+    platform: row.platform || 'app',
+    surface: row.surface || 'app',
+    createdAt: row.created_at,
   };
 }
 
@@ -156,32 +175,58 @@ router.get('/leads', authenticate, async (req, res) => {
   // Transform and enrich each lead
   const transformed = (leads || []).map(transformLead);
 
-  // Batch-fetch last message + message count for all leads
+  // Batch-fetch last message + message count from both tables
   const leadIds = transformed.map(l => l.id);
 
   if (leadIds.length > 0) {
-    // Get message counts
-    const { data: countData } = await supabase
-      .from('messenger_messages')
-      .select('lead_id')
-      .in('lead_id', leadIds);
+    // Build a map of leadId → pipsight_user_id for chat_history lookups
+    const userIdMap = {};
+    (leads || []).forEach(row => {
+      userIdMap[row.id] = row.pipsight_user_id || row.id;
+    });
+    const chatUserIds = [...new Set(Object.values(userIdMap))];
 
+    // Fetch from both tables in parallel
+    const [messengerCountRes, messengerLastRes, chatCountRes, chatLastRes] = await Promise.all([
+      supabase.from('messenger_messages').select('lead_id').in('lead_id', leadIds),
+      supabase.from('messenger_messages').select('lead_id, text, created_at').in('lead_id', leadIds).order('created_at', { ascending: false }),
+      supabase.from('chat_history').select('user_id').in('user_id', chatUserIds),
+      supabase.from('chat_history').select('user_id, content, created_at').in('user_id', chatUserIds).order('created_at', { ascending: false })
+    ]);
+
+    // Messenger counts
     const counts = {};
-    (countData || []).forEach(row => {
+    (messengerCountRes.data || []).forEach(row => {
       counts[row.lead_id] = (counts[row.lead_id] || 0) + 1;
     });
 
-    // Get last message per lead (most recent)
-    const { data: lastMsgs } = await supabase
-      .from('messenger_messages')
-      .select('lead_id, text, created_at')
-      .in('lead_id', leadIds)
-      .order('created_at', { ascending: false });
+    // Chat history counts (map user_id back to lead_id)
+    const reverseMap = {};
+    Object.entries(userIdMap).forEach(([leadId, userId]) => { reverseMap[userId] = leadId; });
+    (chatCountRes.data || []).forEach(row => {
+      const leadId = reverseMap[row.user_id] || row.user_id;
+      counts[leadId] = (counts[leadId] || 0) + 1;
+    });
 
+    // Last message: pick the most recent across both tables
     const lastMsgMap = {};
-    (lastMsgs || []).forEach(row => {
+    const lastMsgTime = {};
+
+    (messengerLastRes.data || []).forEach(row => {
       if (!lastMsgMap[row.lead_id]) {
         lastMsgMap[row.lead_id] = row.text;
+        lastMsgTime[row.lead_id] = new Date(row.created_at).getTime();
+      }
+    });
+
+    (chatLastRes.data || []).forEach(row => {
+      const leadId = reverseMap[row.user_id] || row.user_id;
+      const ts = new Date(row.created_at).getTime();
+      if (!lastMsgMap[leadId] || ts > lastMsgTime[leadId]) {
+        let text = row.content;
+        if (text.startsWith('[Agent]: ')) text = text.replace(/^\[Agent\]: /, '');
+        lastMsgMap[leadId] = text;
+        lastMsgTime[leadId] = ts;
       }
     });
 
@@ -194,17 +239,65 @@ router.get('/leads', authenticate, async (req, res) => {
   res.json(transformed);
 });
 
-// Get messages for a lead
+// Get messages for a lead — unified feed from messenger_messages + chat_history
 router.get('/leads/:leadId/messages', authenticate, async (req, res) => {
-  const { data: messages, error } = await supabase
-    .from('messenger_messages')
-    .select('*')
-    .eq('lead_id', req.params.leadId)
-    .order('created_at', { ascending: true });
+  // Look up the lead to get pipsight_user_id for chat_history queries
+  const { data: lead } = await supabase
+    .from('leads')
+    .select('pipsight_user_id')
+    .eq('id', req.params.leadId)
+    .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  const chatUserId = lead?.pipsight_user_id || req.params.leadId;
 
-  res.json((messages || []).map(transformMessage));
+  // Fetch from both tables in parallel
+  const [messengerResult, chatResult] = await Promise.all([
+    supabase
+      .from('messenger_messages')
+      .select('*')
+      .eq('lead_id', req.params.leadId)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('chat_history')
+      .select('*')
+      .eq('user_id', chatUserId)
+      .order('created_at', { ascending: true })
+  ]);
+
+  if (messengerResult.error && chatResult.error) {
+    return res.status(500).json({ error: messengerResult.error.message });
+  }
+
+  const messengerMsgs = (messengerResult.data || []).map(row => ({
+    ...transformMessage(row),
+    _source: 'messenger',
+    _ts: new Date(row.created_at).getTime()
+  }));
+
+  const chatMsgs = (chatResult.data || []).map(row => ({
+    ...transformChatHistoryRow(row),
+    _source: 'chat_history',
+    _ts: new Date(row.created_at).getTime()
+  }));
+
+  // Merge and sort chronologically
+  const merged = [...messengerMsgs, ...chatMsgs].sort((a, b) => a._ts - b._ts);
+
+  // Deduplicate: if a messenger msg and chat_history msg are within 2s
+  // with same senderType and similar text, keep only the messenger one (richer metadata)
+  const deduped = [];
+  for (const msg of merged) {
+    const isDupe = deduped.some(existing =>
+      Math.abs(existing._ts - msg._ts) < 2000 &&
+      existing.senderType === msg.senderType &&
+      (existing.text === msg.text || existing.text.includes(msg.text) || msg.text.includes(existing.text))
+    );
+    if (!isDupe) deduped.push(msg);
+  }
+
+  // Strip internal fields before sending
+  const result = deduped.map(({ _source, _ts, ...rest }) => rest);
+  res.json(result);
 });
 
 // Update lead notes

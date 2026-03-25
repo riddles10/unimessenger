@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Gear } from '@phosphor-icons/react';
+import { Gear, SignOut } from '@phosphor-icons/react';
 import ConversationList from './ConversationList';
 import ChatView from './ChatView';
 import LeadPanel from './LeadPanel';
@@ -7,7 +7,7 @@ import SettingsModal from '../../components/SettingsModal';
 import { fetchLeads, fetchMessages, toggleMode } from '../../utils/api';
 import { getSocket } from '../../utils/socket';
 
-const InboxPage = () => {
+const InboxPage = ({ user, onLogout }) => {
   const [leads, setLeads] = useState([]);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -122,15 +122,22 @@ const InboxPage = () => {
       <div className="h-[56px] w-full border-b border-[#2a2e39] bg-[#131722] flex items-center px-6 flex-shrink-0 z-10">
         <div className="w-8 h-8 rounded bg-[#00e5ff] flex items-center justify-center mr-4 text-black font-bold">P</div>
         <h1 className="font-semibold text-lg tracking-wide border-r border-[#2a2e39] pr-4 mr-4">Pipsight Inbox</h1>
-        <span className="text-[#8a91a4] text-sm hidden sm:inline-block">Agent: <strong className="text-white">Admin</strong></span>
-        
-        <div className="ml-auto flex items-center">
-          <button 
+        <span className="text-[#8a91a4] text-sm hidden sm:inline-block">Agent: <strong className="text-white">{user?.email || 'Agent'}</strong></span>
+
+        <div className="ml-auto flex items-center gap-1">
+          <button
             onClick={() => setIsSettingsOpen(true)}
             className="w-10 h-10 rounded-full flex items-center justify-center text-[#8a91a4] hover:text-[#00e5ff] hover:bg-[#1e2433] transition-colors"
             title="Settings"
           >
             <Gear size={22} weight="bold" />
+          </button>
+          <button
+            onClick={onLogout}
+            className="w-10 h-10 rounded-full flex items-center justify-center text-[#8a91a4] hover:text-[#ff3366] hover:bg-[#1e2433] transition-colors"
+            title="Sign out"
+          >
+            <SignOut size={20} weight="bold" />
           </button>
         </div>
       </div>

@@ -21,5 +21,4 @@ export const INTENT_COLORS = {
   ready_to_buy: { bg: 'rgba(0,255,136,0.1)', text: 'var(--color-neon-green)', border: 'var(--color-neon-green)' }
 };
 
-export const BACKEND_URL = 'https://unimessenger.onrender.com';
-export const AUTH_TOKEN = 'mock-supabase-jwt';
+export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://unimessenger.onrender.com';
