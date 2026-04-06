@@ -24,19 +24,28 @@ router.post('/internal/welcome', async (req, res) => {
 });
 
 // Called by Pipsight after each chat_history insert from the in-app AI flow.
-// Pipsight already wrote the row(s) — this endpoint does NOT touch the DB.
-// It only resolves user_id → lead_id and broadcasts a `new_message` socket
-// event so any agent currently viewing that conversation in Unimessenger sees
-// the turn populate live.
+// Pipsight already wrote the row(s) — this endpoint does NOT touch chat_history.
+// It resolves user_id → lead_id (auto-creating a stub lead if none exists yet)
+// and broadcasts a `new_message` socket event so any agent currently viewing
+// that conversation in Unimessenger sees the turn populate live.
 //
 // Body shape (single row):
-//   { user_id, role: 'user' | 'model', content, surface?, platform?, message_id?, created_at? }
+//   { user_id, role: 'user' | 'model', content,
+//     name?, email?, phone?,                       // optional Pipsight profile fields
+//     surface?, platform?, message_id?, created_at? }
 //
-// If no lead exists yet for that Pipsight user (e.g. they registered before
-// Unimessenger was deployed and haven't been onboarded), responds 200 with
-// emitted: false. Pipsight should treat this endpoint as fire-and-forget.
+// Stub-lead creation: if Pipsight broadcasts a chat_message for a user that
+// has never been onboarded (no welcome queue, no Bird inbound, no outbound
+// modal), we create a minimal `leads` row on the fly so the conversation is
+// immediately visible in the inbox sidebar. Without this, agents only ever
+// see leads that originated through one of the messenger flows — every
+// in-app-only Pipsight user would be invisible.
 router.post('/internal/chat-message', async (req, res) => {
-  const { user_id, role, content, surface, platform, message_id, created_at } = req.body || {};
+  const {
+    user_id, role, content,
+    name, email, phone,
+    surface, platform, message_id, created_at,
+  } = req.body || {};
 
   if (!user_id || !role || !content) {
     return res.status(400).json({ error: 'user_id, role, and content are required' });
@@ -45,16 +54,59 @@ router.post('/internal/chat-message', async (req, res) => {
     return res.status(400).json({ error: 'role must be "user" or "model"' });
   }
 
-  // Resolve user_id → lead. If no lead, there's nothing to update — silently ack.
-  const { data: lead, error } = await supabase
+  // Resolve user_id → lead. If no lead exists, create a stub so the
+  // conversation becomes visible in the inbox immediately.
+  let { data: lead, error } = await supabase
     .from('leads')
     .select('id')
     .eq('pipsight_user_id', user_id)
     .maybeSingle();
 
   if (error) return res.status(500).json({ error: error.message });
+
   if (!lead) {
-    return res.json({ ok: true, emitted: false, reason: 'no_lead_for_user' });
+    // Pull profile fields from Pipsight's public.users table so the stub
+    // lead lands with a real name/email/phone instead of "Unknown". The
+    // request body still wins if Pipsight chose to send these inline.
+    let resolvedName = name;
+    let resolvedEmail = email;
+    let resolvedPhone = phone;
+
+    const { data: profile } = await supabase
+      .from('users')
+      .select('first_name, last_name, email, phone_number')
+      .eq('id', user_id)
+      .maybeSingle();
+
+    if (profile) {
+      const fullName = [profile.first_name, profile.last_name]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      if (!resolvedName && fullName) resolvedName = fullName;
+      if (!resolvedEmail) resolvedEmail = profile.email || null;
+      if (!resolvedPhone) resolvedPhone = profile.phone_number || null;
+    }
+
+    const { data: created, error: createErr } = await supabase
+      .from('leads')
+      .insert({
+        pipsight_user_id: user_id,
+        name: resolvedName || 'Unknown',
+        email: resolvedEmail || null,
+        phone: resolvedPhone || null,
+        stage: 'new_lead',
+        mode: 'ai',
+        preferred_channel: 'whatsapp',
+      })
+      .select('id')
+      .single();
+
+    if (createErr) {
+      console.error('[chat-message] Failed to auto-create stub lead', createErr);
+      return res.status(500).json({ error: createErr.message });
+    }
+    lead = created;
   }
 
   // Mirror the senderType logic in routes/agents.js → transformChatHistoryRow
